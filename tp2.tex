@@ -79,6 +79,482 @@
 % SECCIONES DEL INFORME
 % --------------------------------------------------------
 
+\section{Implementación del algoritmo de Kittler}
+
+\section*{Instrucciones}
+
+\begin{enumerate}
+  \item Implemente el algoritmo de Kittler, y realice una prueba con la imagen de entrada provista, aplicando posteriormente el umbral óptimo obtenido.
+  
+  \begin{enumerate}
+    \item (\textbf{10 puntos}) Implemente una función \texttt{calcular\_momentos\_estadisticos(T, p)} la cual reciba un umbral candidato \(T\) y una función de densidad \(p\), y retorne todos los parámetros de la función. Comente su implementación con detalle en este informe.
+
+    La función implementada es la siguiente:
+
+    \begin{lstlisting}[language=Python]
+    def compute_density_function(U):
+  """
+    Calcula la funcion de densidad normalizada de las intensidades de una imagen en greyscale nivel
+
+    Params:
+    U : torch.Tensor
+        Tensor de imagen NxNx1 con los valores de intensidad de la imagen (0 a 255).
+
+    Retorna:
+    p : torch.Tensor
+        Vector de tamanno 256 con la probabilidad de ocurrencia (histograma normalizado).
+    z : torch.Tensor
+        Vector con los valores de intensidad (0 a 255)
+  """
+
+  # Gneramos el histograma de intensidades con el np.histogram
+  histogram, _ = np.histogram(U.numpy(), range = (0, 256), bins = 256)
+
+  # Se realiza la normalizacion para que la suma de 1
+  p = histogram / np.sum(histogram)
+
+  return torch.tensor(p, dtype=torch.float64), torch.arange(256, dtype=torch.float64)
+
+def compute_gmm_parameters(T, h_z):
+    """
+      Calcula los parametros de las dos distribuciones Gaussianas G1 y G2
+      separadas segun el T
+
+      Params:
+      T : int
+          Umbral, (0 a 255) que separa las dos clases (background g1 y foreground g2)
+      h_z : torch.Tensor
+          Funcion de densidad de probabilidad del histograma
+
+      Retorna:
+      p1, mu1, var1, p2, mu2, var2 : tuple(float)
+      - p1, p2 : probabilidades (pesos) de cada gaussiana
+      - mu1, mu2 : medias de g1 y g2
+      - var1, var2 : varianzas de cada gaussiana
+  """
+  z = torch.arange(256, dtype=torch.float64)
+
+
+  # Partimos el histograma entre 2 definidos por la frontera en T
+  left_histogram = h_z[:T]
+  right_histogram = h_z[T:]
+
+  left_z = z[:T]
+  right_z = z[T:]
+
+  # Se Suma la energia que hay en cada region y se agrega para evitar div entre 0
+  # En casos donde el umbral es malo y o p1 o p2 puede dar 0
+  p1 = left_histogram.sum() + 1e-8
+  p2 = right_histogram.sum() + 1e-8
+
+  # Se estima mu de cada una de las gaussianas segun la energia
+  mu1 = ( (1/p1) * ( left_histogram * left_z ).sum() ) + 1e-8
+  mu2 = ( (1/p2) * ( right_histogram * right_z ).sum()) + 1e-8
+
+  # Se estima tambien la varianza de cada una de las gaussianas
+  var1 = ((1/p1) * ((left_z - mu1) ** 2 * left_histogram).sum()) + 1e-8
+  var2 = ((1/p2) * ((right_z - mu2) ** 2 * right_histogram).sum()) + 1e-8
+
+  return p1, mu1, var1, p2, mu2, var2
+    \end{lstlisting}
+    
+    \begin{enumerate}
+      \item Diseñe al menos 2 pruebas unitarias donde verifique el funcionamiento correcto. Detalle en este documento el diseño de tales pruebas y los resultados, indicando si son los esperados.
+    \end{enumerate}
+
+    La primera prueba unitaria esta designada para revisar que los momentos estadisticos se encuentre calculados de forma correcta en el caso trivial donde todos los datos se encuentran en 2 puntos extremos.
+
+    \begin{lstlisting}[language=Python]
+        def test_perfectly_separated_distributions():
+            print("test_perfectly_separated_distributions: Starting")
+            h = torch.zeros(256, dtype=torch.float64)
+            h[0] = 70.0  #  mayoria es background
+            h[255] = 30.0  # pocos datos que no son ruido
+            T = 128 # espacio medio de 256
+        
+            p1, mu1, var1, p2, mu2, var2 = compute_gmm_parameters(T, h)
+        
+            tolerance_level = 1e-3
+        
+            # Pesos deben ser igual al porcentaje de datos en esa parte
+            assert torch.isclose(p1, torch.tensor(70.0, dtype=torch.float64), atol=tolerance_level)
+            assert torch.isclose(p2, torch.tensor(30.0, dtype=torch.float64), atol=tolerance_level)
+        
+            # Medias deben estar en 0 y en 2.55
+            assert torch.isclose(mu1, torch.tensor(0.0, dtype=torch.float64), atol=tolerance_level)
+            assert torch.isclose(mu2, torch.tensor(255.0, dtype=torch.float64), atol=tolerance_level)
+        
+            # Varianzas deben ir a 0 porque hay maxima concentracion en un punto
+            assert var1 >= 0.0 and var2 >= 0.0
+            assert var1.item() < tolerance_level
+            assert var2.item() < tolerance_level
+            print("test_perfectly_separated_distributions: OK")
+    \end{lstlisting}
+
+    La segunda prueba unitaria esta designada para revisar que en el caso donde por el parámetro T, solo exista una concentración de datos en alguno de los dos bordes lados de T, que los parámetros estimados no se indefinan.
+
+    \begin{lstlisting}[language=Python]
+        def test_zero_at_left_side():
+            print("test_zero_at_left_side: Starting")
+            h = torch.zeros(256, dtype=torch.float64)
+            h[255] = 100.0     # todo a la derecha
+            T = 100
+        
+            p1, mu1, var1, p2, mu2, var2 = compute_gmm_parameters(T, h)
+            print(p1, mu1, var1, p2, mu2, var2 )
+        
+            # Verificamos que no haya una indefinicion de ninguno de los momentos estadisticos
+            for statistic_moment in [p1, mu1, var1, p2, mu2, var2]:
+                assert torch.isfinite(statistic_moment)
+        
+            # Verificamos que los valores de la derecha esten correctos en no ser cero, pues son los que si estan
+            assert p2.item() != 0.0
+            assert mu2.item() != 0.0
+            assert var2.item() != 0.0
+        
+            tolerance_level = 1e-3
+        
+        
+            # Verificamos que el lado izquierdo del histograma todos los momentos estadisticos se acerquen a 0
+            assert torch.isclose(p1, torch.tensor(0.0, dtype=torch.float64), atol=tolerance_level)
+            assert torch.isclose(mu1, torch.tensor(0.0, dtype=torch.float64), atol=tolerance_level)
+            assert torch.isclose(var1, torch.tensor(0.0, dtype=torch.float64), atol=tolerance_level)
+            print("test_zero_at_left_side: Ok")
+    \end{lstlisting}
+
+    Los resultados al correr las prueba unitarias para la función serían los siguientes:
+
+    \begin{lstlisting}
+        test_perfectly_separated_distributions: Starting
+        test_perfectly_separated_distributions: OK
+        test_zero_at_left_side: Starting
+        tensor(1.0000e-08, dtype=torch.float64) tensor(1.0000e-08, dtype=torch.float64) tensor(1.0000e-08, dtype=torch.float64) tensor(100.0000, dtype=torch.float64) tensor(255.0000, dtype=torch.float64) tensor(1.0000e-08, dtype=torch.float64)
+        test_zero_at_left_side: Ok
+    \end{lstlisting}
+
+    Por lo que se verifica que al menos según estas pruebas, el método esta funcionando de forma correcta.
+    
+    \item (\textbf{10 puntos}) Implemente la función \texttt{calcular\_costo(J[T], p)} la cual calcule el costo del umbral candidato \(T\). Comente su implementación con detalle en este informe.
+
+    La función implementada \texttt{calcular\_costo\_J(T, p)}, implementa el la función $J(T)$ para decidir si un umbral T es un buen candidato.
+    La formula propuesta toma el supuesto de que en los histogramas (funcion de densidad) hay 2 concentraciones de datos que se asemejan a dos gaussianas que corresponden al ruido/background y a las superficies de interes, por lo que intenta aproximar los parámetros a través de máxima verosimilitud de forma tal que:
+\[
+p_1=\!\!\sum_{i\le T}\!p(i),\quad 
+\mu_1=\frac{1}{p_1}\!\!\sum_{i\le T}\! i\,p(i),\quad 
+\sigma_1^2=\frac{1}{p_1}\!\!\sum_{i\le T}\!(i-\mu_1)^2 p(i),
+\]
+
+Y el coste de minimizar sería
+\[
+J(T)=1+2\big[p_1\ln(\sigma_1)+p_2\ln(\sigma_2)\big]-2\big[p_1\ln p_1+p_2\ln p_2\big],
+\]
+
+La implementación que sigue entonces plasma lo postulado:
+
+    \begin{lstlisting}[language=python]
+        def calcular_costo_J(T, p):
+          """
+            Calcula el valor de costo J(T) para verificar que tan buen candidato es el umbral T
+            Params:
+            T : int
+                Umbral (entre 0 y 255) que logra separar entre fondo y no fondo
+            p : torch.Tensor
+                Funcion de densidad de probabilidad
+            Retorna:
+            j_cost : torch.Tensor
+                Valor de la funcion de costo J(T) para T
+            (p1, mu1, var1, p2, mu2, var2) : tuple
+                Parametros de las dos distribuciones gaussianas estimadas:
+                - p1, p2 : probabilidades (pesos) de cada clase.
+                - mu1, mu2 : medias.
+                - var1, var2 : varianzas.
+          Util para despues graficar los resultados estimados
+          """
+        
+          assert T < 256 and isinstance(T, int)
+          assert len(p) == 256
+        
+          # se estiman los parametros para las gaussianas usando de diferenciador a T
+          p1, mu1, var1, p2, mu2, var2 = compute_gmm_parameters(T, p)
+        
+          sdv1 = torch.sqrt(var1)
+          sdv2 = torch.sqrt(var2)
+        
+          #Calculamos segun la formula propuesta por kittler
+          j_cost = 1.0 + 2.0*(p1*torch.log(sdv1) + p2*torch.log(sdv2)) - 2.0*(p1*torch.log(p1) + p2*torch.log(p2))
+          return j_cost, (p1, mu1, var1, p2, mu2, var2)
+    \end{lstlisting}
+    
+    \begin{enumerate}
+      \item Diseñe al menos 2 pruebas unitarias donde verifique el funcionamiento correcto. Detalle en este documento el diseño de tales pruebas y los resultados, indicando si son los esperados.
+    \end{enumerate}
+
+    La primera prueba unitaria designada es aquella que busca revisar que los datos calculados sean sanos y que cumplan los supuestos establecidos:
+
+    \begin{lstlisting}[language=python]
+        def test_j_cost_data_quality():
+
+            # Esta prueba revisa que los datos que se devuelvan cumplan los supuestos y que 
+            #ademas tambien no se indefinan
+            print("test_j_cost_data_quality: Starting")
+        
+            h = torch.zeros(256, dtype=torch.float64)
+            h[81] = 70.0
+            h[1]  = 30.0
+            h = h / h.sum()
+            T = 40
+        
+            j_cost, params = calcular_costo_J(T, h)
+            p1, mu1, var1, p2, mu2, var2 = params
+        
+            # Evaluamos cada momento estadistico
+            for val in [j_cost, p1, mu1, var1, p2, mu2, var2]:
+                assert torch.isfinite(val)
+        
+            tolerance = 1e-3
+        
+            # Evaluamos que la energia se acerque a 1
+            assert 0.99 <= (p1 + p2).item() <= (1 + tolerance)
+            print("test_j_cost_data_quality: OK")
+    \end{lstlisting}
+
+    La segunda prueba unitaria lo que hace es que va a revisar que entre dos gaussianas claramente definidas con proporciones conocidas, que la ubicación en el punto medio entre las dos gaussianas provea de un valor menor que aquel de $J(T)$  centrado en cada uno de los centros de las gaussianas.
+
+    \begin{lstlisting}[language=python]
+        def test_j_cost_threshold_optimum():
+            # Prueba para evaluar que los optimos se encuentren precisamente
+            # En el valle entre los dos histogramas para asegurarnos de que 
+            # Se comporta de la forma esperada
+            print("test_j_cost_threshold_optimum: Starting")
+        
+            h = torch.zeros(256, dtype=torch.float64)
+            h[81] = 70.0
+            h[1]  = 30.0
+            h = h / h.sum()
+            T = 40  # umbral entre los dos picos
+        
+            # Estimamos el valor JT en la cuspide de ambas gausianas y en el punto medio de distancia
+            j_mid_true_optimum, _   = calcular_costo_J(T, h)
+            j_left, _  = calcular_costo_J(1, h)
+            j_right, _ = calcular_costo_J(81, h)
+        
+            tol = 1e-3
+            assert j_mid_true_optimum <= j_left + tol
+            assert j_mid_true_optimum <= j_right + tol
+            print("test_j_cost_threshold_optimum: OK")
+
+    \end{lstlisting}
+
+    Y al correr ambos test cases, se obtiene un resultado satisfactorio.
+
+    \begin{lstlisting}
+        test_j_cost_data_quality: Starting
+        test_j_cost_data_quality: OK
+        test_j_cost_threshold_optimum: Starting
+        test_j_cost_threshold_optimum: OK
+    \end{lstlisting}
+    
+    \item (\textbf{20 puntos}) Basado en ambas funciones, implemente la función \texttt{calcular\_T\_optimo\_Kittler(Imagen)} la cual retorne el \(T\) óptimo para umbralizar la imagen recibida, además de la imagen umbralizada.
+
+    La función va a realizar la busqueda siguiendo la estrategia de búsqueda por fuerza bruta del valor optimo T, ya que solo tiene un rango definido de entre 0 a 255, por lo que solo serían 256 posibles valores. Se implementará de forma tal que en un for se llevara el registro por cada umbral posible y se retorna el valor mínimo obtenido.
+
+    La implementación sería la siguiente:
+
+    \begin{lstlisting}[language=python]
+        def optimize_t(U):
+          """
+            Funcion para obtener el umbral optimo T para la imagen U utilizando como criterio de busqueda 
+            la funcion j(T)
+        
+            Params:
+              U: torch.Tensor
+                Tensor de imagen NxNx1 con los valores de intensidad de la imagen (0 a 255).
+            Return:
+              (best_T, best_J, best_params), J_history, out : tuple
+                Parametros de ambas distribuciones asi como el coste minimizado y el umbral T que lo logra
+                Historial de Js para validacion
+                Imagen binarizada con el umbral T
+          """
+        
+          # Obtenemos primero la funcion de densidad
+          p, _ = compute_density_function(U)
+          J_history = []
+        
+          # Calculamos por fuerza bruta, como es un espacio de busqueda tan pequenno
+          # lo podemos permitir
+          for T in range(1, 256):
+            J, params = calcular_costo_J(T, p)
+            J_history.append((T, J.item(), params))
+        
+          # Buscamos de todos los umbrales posibles, cual fue el mejor segun min(j(T))
+          best_T, best_J, best_params = min(J_history, key=lambda x: x[1])
+        
+          # Binarizamos la imagen utilizando el t encontrado
+          out = torch.where(
+              U >= best_T,
+              torch.tensor(1, dtype=torch.uint8),
+              torch.tensor(0, dtype=torch.uint8)
+          )
+        
+          return (best_T, best_J, best_params), J_history, out
+    \end{lstlisting}
+    
+    \item Aplique el algoritmo de Kittler en la imagen \texttt{cuadro1\_005.bmp} provista.
+    
+    \begin{enumerate}
+      \item Grafique el histograma normalizado de la imagen de entrada provista.
+      
+      Para obtener el histograma normalizado de la imagen, se procedio a correr el siguiente código:
+
+    \begin{lstlisting}[language=python]
+        U_1 = torch.tensor(np.array(Image.open('cuadro1_005.bmp').convert('L')))
+        p, z = compute_density_function(U_1)
+        plt.figure(figsize=(8,4))
+        plt.bar(z.numpy(), p.numpy(), width=1.0, color='gray', edgecolor='black')
+        plt.title("histograma normalizado")
+        plt.xlabel("intensidad de pixel (0 a 255)")
+        plt.ylabel("p(z)")
+        plt.grid(alpha=0.3)
+        plt.show()
+    \end{lstlisting}
+
+    Lo cual como se puede observar en la figura \ref{fig:hist_norm}, se pueden observar dos clases claramente demarcadas que corresponden a la clase de ruido/fondo (clase de la izquierda, menor intensidad) y superficie de interes (clase de la derecha, con mayores intesidades).
+
+    \begin{figure}[h]
+        \centering
+        \includegraphics[width=0.5\linewidth]{images/histograma_cuadro_1_005.png}
+        \caption{Histograma normalizado para la imagén cuadro\_1\_005.bmp}
+        \label{fig:hist_norm}
+    \end{figure}
+      
+      \item Grafique la función \(J(T)\), y documente el valor \(T = \tau\) que logra el valor mínimo de \(J(T)\), junto con las medias y varianzas de las dos funciones Gaussianas superpuestas. ¿Son coherentes tales valores con el histograma graficado en el punto anterior? \\
+      \textit{El valor óptimo en el caso de esta imagen debe ser cercano a \(T = 166\), con \(\mu_1 = 149.05\), \(\mu_2 = 219.49\), \(\sigma_1^2 = 15.36\) y \(\sigma_2^2 = 10.05\).}
+
+    Para graficar la exploración de la función $J(T)$, así como una graficación de la aproximación de ambas gaussianas de la imagen, se ejecutó el siguiente código:
+
+    \begin{lstlisting}[language=python]
+        from scipy.stats import norm
+        # Obtenemos los umbrales y su performance historico
+        (best_T, best_J, best_params), J_history, out = optimize_t(U_1)
+        
+        # convertimos a un arreglo ambos
+        Ts = [t for t, j, _ in J_history]
+        Js = [j for t, j, _ in J_history]
+        
+        
+        # desempaquetamos los mejores parametros para poder graficar
+        p1, mu1, var1, p2, mu2, var2 = best_params
+        
+        x = np.linspace(0, 255, 256)
+        
+        # calculamos los valores de las gaussianas
+        gauss1 = p1 * norm.pdf(x, mu1, np.sqrt(var1))
+        gauss2 = p2 * norm.pdf(x, mu2, np.sqrt(var2))
+        
+        scale = max(Js) / max(gauss1 + gauss2)
+        gauss1_scaled = gauss1 * scale
+        gauss2_scaled = gauss2 * scale
+        
+        plt.figure(figsize=(8, 4))
+        
+        # ploteamos
+        plt.plot(Ts, Js, label="J(T)", color="blue")
+        
+        plt.plot(x, gauss1_scaled, "r--", lw=1.5, label="Gaussiana 1")
+        plt.plot(x, gauss2_scaled, "g--", lw=1.5, label="Gaussiana 2")
+        
+        # umbral optimo
+        plt.axvline(best_T, color="black", linestyle="--", lw=1.2, label=f"T* = {best_T:.0f}")
+        
+        plt.title(f"Curva J(T) y Gaussianas estimadas (T* = {best_T:.0f})")
+        plt.xlabel("T")
+        plt.ylabel("J(T) / Densidad Escalada")
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+    \end{lstlisting}
+
+    Como se puede observar en la figura \ref{fig:curvajt}, se puede observar que se esta detectando un mínimo justo dentro del valle entre las dos clases identificadas basados en el histograma.
+
+    \begin{figure}[h]
+        \centering
+        \includegraphics[width=0.5\linewidth]{images/curva_jt.png}
+        \caption{Curva de J(T) y las gaussianas estimadas utilizando el mejor umbral T=167}
+        \label{fig:curvajt}
+    \end{figure}
+
+En dicha figura \ref{fig:curvajt}, el umbral seleccionado fue de 167 por lo que se encuentra coherente con el histograma normalizado donde se observa un valle que comienza entre la acumulación de datos alrededor de 150 y la otra acumulación más fuerte centrada en alrededor de 220-230.
+
+Al imprimir los parámetros estimados según cada gaussiana, se obtiene que:
+
+\begin{lstlisting}
+    ------- Gaussiana 1 -------
+    p1 = 0.019, mu1 = 149.452, var1 = 15.366
+    ------- Gaussiana 2 -------
+    p2 = 0.981, mu2 = 219.493, var2 = 10.055
+\end{lstlisting}
+
+Por lo que al analizarlo con los parámetros esperados, se encuentran cercanos a lo especificado en el enunciado de:
+
+\begin{table}[H]
+\centering
+\caption{Comparación entre parámetros esperados y obtenidos}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{@{}lccccp{6.5cm}@{}}
+\toprule
+\textbf{Parámetro} & \textbf{Esperado} & \textbf{Obtenido} & \textbf{Diferencia} & \textbf{Interpretación} \\ 
+\midrule
+\textbf{$\tau$ (umbral óptimo)}          & 168.00 & \textbf{167.00} & 0.00  & Leve diferencia, se encuentra cercano al valor esperado. \\
+\textbf{$\mu_1$ (media Gaussiana 1)}     & 149.45 & \textbf{149.45} & 0.00  & Ajuste perfecto de la media del primer modo. \\
+\textbf{$\mu_2$ (media Gaussiana 2)}     & 219.49 & \textbf{219.49} & 0.00  & Ajuste perfecto de la media del segundo modo. \\
+\textbf{$\sigma_1^2$ (varianza Gaussiana 1)} & 15.36 & \textbf{15.37} & +0.01 & Coincide con variación mínima ($<$0.1\%). \\
+\textbf{$\sigma_2^2$ (varianza Gaussiana 2)} & 10.05 & \textbf{10.06} & +0.01 & Coincide con variación mínima ($<$0.1\%). \\
+\textbf{$p_1$ (peso Gaussiana 1)}        & -   & \textbf{0.019}  & -  & Primer modo minoritario (1.9\% del total). \\
+\textbf{$p_2$ (peso Gaussiana 2)}        & -    & \textbf{0.981}  & -  & Segundo modo dominante (98.1\% del total). \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+
+
+      
+      \item Logrará el umbral óptimo \(T\) obtenido umbralizar satisfactoriamente la imagen de prueba? Umbralice la imagen de entrada provista e interprete sus resultados. \\
+      \textit{Asigne como valor de 255 los píxeles del cuadrado (clase foreground), y 0 los del fondo (clase background).}
+
+      Al ejecutar las siguientes lineas de código:
+
+      \begin{lstlisting}[language=python]
+        original_image = Image.open('cuadro1_005.bmp').convert('L')
+        out_image = Image.open("out_image.png")
+        
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+        
+        axes[0].imshow(original_image, cmap='gray')
+        axes[0].set_title("Original Image")
+        axes[0].axis('off')
+        
+        axes[1].imshow(out_image, cmap='gray')
+        axes[1].set_title("Kittler Image")
+        axes[1].axis('off')
+        
+        plt.tight_layout()
+        plt.show()
+      \end{lstlisting}
+
+      Se obtiene la imagen que se puede observar en la figura \ref{fig:binarization}, donde se puede observar que la umbralización en este caso fue satisfactoria, ya que no solo removío el ruido que estaba alrededor del objeto rectangular, si no que además removío el ruido que se encontraba dentro de este objeto.
+
+      \begin{figure}
+          \centering
+          \includegraphics[width=0.5\linewidth]{images/binarization.png}
+          \caption{Antes y despúes de binarizar la imagen utilizando el umbral T=167}
+          \label{fig:binarization}
+      \end{figure}
+    \end{enumerate}
+  \end{enumerate}
+\end{enumerate}
+
 \section{Distancia de Bhattacharyya}
 
 Se utilizó el código mostrado en \autoref{lst:bhattacharyya} para comparar las funciones de densidad estimadas con el ajuste del modelo mixto Gaussiano de Kittler, $p(x)$, y la aproximación de la densidad mediante el histograma de los datos, $q(x)$. El valor obtenido, mostrado en \autoref{tab:bhattacharyya_result}, indica que las densidades $p(x)$ y $q(x)$ son estadísticamente muy similares, lo que sugiere que el modelo de Kittler se ajusta de manera muy precisa a la distribución real de los datos.
