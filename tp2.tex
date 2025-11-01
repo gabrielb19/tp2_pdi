@@ -80,9 +80,25 @@
 % --------------------------------------------------------
 
 \section{Distancia de Bhattacharyya}
-\subsection{Implementación en código}
 
-\begin{lstlisting}[caption={Ejemplo de código Python}, label={lst:ejemplo}]
+Se utilizó el código mostrado en \autoref{lst:bhattacharyya} para comparar las funciones de densidad estimadas con el ajuste del modelo mixto Gaussiano de Kittler, $p(x)$, y la aproximación de la densidad mediante el histograma de los datos, $q(x)$. El valor obtenido, mostrado en \autoref{tab:bhattacharyya_result}, indica que las densidades $p(x)$ y $q(x)$ son estadísticamente muy similares, lo que sugiere que el modelo de Kittler se ajusta de manera muy precisa a la distribución real de los datos.
+
+
+\begin{table}[!h]
+\centering
+\caption{Distancia de Bhattacharyya}
+\label{tab:bhattacharyya_result}
+\begin{tabular}{lc}
+\hline
+\textbf{Métrica} & \textbf{Valor} \\
+\hline
+Distancia de Bhattacharyya & $2.4031 \times 10^{-5}$ \\
+\hline
+\end{tabular}
+\end{table}
+
+
+\begin{lstlisting}[caption={Función en Python de la distancia de Bhattacharyya}, label={lst:bhattacharyya}]
 def calcular_bhattacharyya_distance(p: torch.Tensor, q: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
     """
     Calcula la distancia de Bhattacharyya entre dos funciones de densidad de probabilidad.
@@ -109,6 +125,13 @@ def calcular_bhattacharyya_distance(p: torch.Tensor, q: torch.Tensor, eps: float
     distance = -torch.log(bc)
     return distance.item()
 \end{lstlisting}
+
+\subsection{Relación entre Bhattacharyya y estimación de parámetros de Kittler}
+La distancia de Bhattacharyya mide el grado en el que dos distribuciones de probabilidad se solapan. En el contexto del algoritmo de Kittler, una de las distribuciones corresponde al modelo estimado mediante la mezcla gaussiana, $p(x)$, y la otra al histograma real de los datos, $q(x)$. 
+
+El proceso de estimación de parámetros en el algoritmo de Kittler busca ajustar los parámetros óptimos de las gaussianas (medias, varianzas y pesos) de manera que el modelo mixto describa de la mejor forma posible la distribución real. 
+
+Cuando la distancia de Bhattacharyya \textbf{disminuye}, el solapamiento entre $p(x)$ y $q(x)$ aumenta, indicando que el modelo estimado se aproxima más fielmente a la distribución real y que los parámetros obtenidos son adecuados. Por el contrario, cuando la distancia de Bhattacharyya \textbf{aumenta}, las distribuciones se solapan menos, lo que refleja un menor ajuste del modelo mixto a la distribución real y, por ende, una estimación menos precisa de los parámetros y del umbral óptimo.
 
 \section{Punto 3}
 \subsection{Método de mejora de umbralización}
