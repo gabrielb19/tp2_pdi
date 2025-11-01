@@ -113,34 +113,32 @@ def calcular_bhattacharyya_distance(p: torch.Tensor, q: torch.Tensor, eps: float
 \section{Punto 3}
 \subsection{Método de mejora de umbralización}
 
-El método de umbralización de \textbf{Kittler e Illingworth (1986)}, conocido como \textit{Minimum Error Thresholding}, parte de la idea de que los niveles de gris de una imagen pueden modelarse como una mezcla de dos distribuciones gaussianas: una que representa el fondo y otra que representa el objeto. El algoritmo busca el umbral $T$ que minimiza la probabilidad de clasificar erróneamente un píxel, lo cual se logra calculando, para cada valor posible de $T$, los parámetros (media, varianza y probabilidad a priori) de ambas clases a partir del histograma de la imagen.
+El método de umbralización de Kittler, parte de la idea de que los niveles de gris de una imagen pueden modelarse como una mezcla de dos distribuciones gaussianas: una que representa el fondo y otra que representa el objeto. El algoritmo busca el umbral $T$ que minimiza la probabilidad de clasificar erróneamente un píxel, lo cual se logra calculando, para cada valor posible de $T$, los parámetros (media, varianza y probabilidad a priori) de ambas clases a partir del histograma de la imagen.
 
 Sin embargo, este procedimiento tiene una limitación. Cuando se evalúa un umbral $T$, las estimaciones de los parámetros de cada clase se realizan sobre las partes del histograma separadas por dicho umbral: los valores menores o iguales a $T$ para el fondo, y los mayores a $T$ para el objeto. Estas porciones no representan las distribuciones gaussianas completas, sino \textbf{distribuciones truncadas}, ya que las colas de las campanas quedan fuera del rango utilizado. Al estimar directamente la media y la varianza sobre estas regiones truncadas, se introduce un \textbf{sesgo}: las medias tienden a desplazarse hacia el umbral y las varianzas resultan subestimadas. Este sesgo afecta negativamente el criterio de error de Kittler y puede llevar a seleccionar un umbral subóptimo, especialmente cuando las distribuciones de fondo y objeto se superponen significativamente.
 
 Para corregir este problema, \textbf{Cho, et al (1989)} propusieron una mejora al método original. Su propuesta consiste en \textbf{compensar el sesgo introducido por el truncamiento}. En lugar de asumir que los datos a cada lado del umbral provienen de una distribución normal completa, los autores asumen que provienen de una normal truncada y, a partir de ella, calcula el valor esperado y la varianza teóricos, y con ello estimar los parámetros de la distribución original no truncada.
 
-Formalmente, si $X \sim \mathcal{N}(\mu, \sigma^2)$ es una variable normal truncada en su cola izquierda en $T$, la media y varianza del truncamiento se expresan como:
+Formalmente, si $X \sim \mathcal{N}(\mu, \sigma^2)$ es una variable normal truncada en su cola izquierda en $T$ (\(X < T\)), la media y varianza del truncamiento se expresan como:
 
 \[
 \mu = \mu_t + \sigma \frac{\phi(z)}{\Phi(z)}, \qquad
 \sigma^2 = \frac{\sigma_t^2}{1 - \frac{\phi(z)}{\Phi(z)} \left( z + \frac{\phi(z)}{\Phi(z)} \right)}
 \]
 
-donde \(z = \frac{T - \mu}{\sigma}\), \(\phi(z)\) es la función de densidad de la normal estándar y \(\Phi(z)\) su función de distribución acumulada. De manera análoga, para el caso de truncamiento inferior (cuando \(X > T\)), se obtienen:
+donde \(z = \frac{T - \mu}{\sigma}\), \(\phi(z)\) es la función de densidad de la normal estándar y \(\Phi(z)\) su función de distribución acumulada. De manera análoga, para el caso de truncamiento inferior (cuando \(X < T\)), se obtienen:
 
 \[
-\mu = \mu_t + \sigma \frac{\phi(z)}{1 - \Phi(z)}, \qquad
-\sigma^2 = \sigma^2_t \left[ 1 + \frac{z \, \phi(z)}{1 - \Phi(z)} - \left( \frac{\phi(z)}{1 - \Phi(z)} \right)^2 \right]
+\mu = \mu_t - \sigma \frac{\phi(z)}{1 - \Phi(z)}, 
+\qquad 
+\sigma^2 = \frac{\sigma_t^2}{1 - \frac{\phi(z)}{1 - \Phi(z)} \left( z - \frac{\phi(z)}{1 - \Phi(z)} \right)}
 \]
 
-En resumen, el método propuesto por Cho et al (1989) propone una reconstrucción de las colas faltantes por el truncamiento a la hora de umbralizar. Con esta reconstrucción, el criterio de error de Kittler se evalúa con parámetros más fieles a la realidad, obteniendo así un umbral más preciso. 
+En resumen, el método propuesto por Cho et al (1989) propone una reconstrucción de las colas faltantes por el truncamiento a la hora de umbralizar. Con esta reconstrucción, el criterio de error de Kittler se evalúa con parámetros más fieles a la realidad, obteniendo así una umbralización más precisa.
 
 % --------------------------------------------------------
 % REFERENCIAS
 % --------------------------------------------------------
-\chapter*{Referencias}
-\addcontentsline{toc}{chapter}{Referencias}
-
 \begin{thebibliography}{99}
 \bibitem{cho1989}
 Cho, Z. H., Haralick, R. M., \& Yi, S. Y. (1989).
